@@ -140,6 +140,7 @@ def setup_stokes_flow(network, phase, Q_inlet, P_outlet=0.0):
     # ================== STAGE 1: Initial solve with flow rate BC ==================
     # Distribute flow rate across inlet pores proportional to their area
     for pore in inlet_pores:
+        print(Q_inlet * cross_area[pore] / total_inlet_area)
         sf.set_rate_BC(
             rates=Q_inlet * cross_area[pore] / total_inlet_area,
             pores=pore
@@ -165,13 +166,12 @@ def setup_stokes_flow(network, phase, Q_inlet, P_outlet=0.0):
         Returns zero when inlet pressure produces exactly Q_inlet.
         """
         # Set inlet pressure BC
-        sf.set_value_BC(values=P_inlet, pores=inlet_pores)
-        sf.set_value_BC(values=P_outlet, pores=outlet_pores)
+        sf.set_value_BC(values=P_inlet, pores=inlet_pores, mode='overwrite')
+        sf.set_value_BC(values=P_outlet, pores=outlet_pores, mode='overwrite')
         sf.run()
         
-        # Update phase and calculate actual flow rate
-        phase.update(sf.soln)
-        Q_actual = np.sum(phase['throat.flow_rate'][inlet_throats])
+        # Calculate actual flow rate from the algorithm
+        Q_actual = np.abs(sf.rate(pores=inlet_pores)[0])
         
         # Return relative error (fsolve drives this to zero)
         return (Q_actual - Q_inlet) / Q_inlet
@@ -180,8 +180,8 @@ def setup_stokes_flow(network, phase, Q_inlet, P_outlet=0.0):
     P_inlet_correct = optimize.fsolve(pressure_error, x0=P_inlet_guess)
     
     # ================== FINAL SOLVE: Apply correct pressure and solve ==================
-    sf.set_value_BC(values=P_inlet_correct, pores=inlet_pores)
-    sf.set_value_BC(values=P_outlet, pores=outlet_pores)
+    sf.set_value_BC(values=P_inlet_correct, pores=inlet_pores, mode='overwrite')
+    sf.set_value_BC(values=P_outlet, pores=outlet_pores, mode='overwrite')
     sf.run()
     
     # Update phase with final solution
