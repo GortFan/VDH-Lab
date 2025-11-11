@@ -25,9 +25,9 @@ def query_throats(network: op.network.Network, label: str = None, property: str 
     >>> query_throats(network, label='ff_to_ff_throat', property='diameter', index=5)
     """
     if index == None:
-        print(network[f'throat.{property}'][network.throats(label)])
+        return network[f'throat.{property}'][network.throats(label)]
     else:
-        print(network[f'throat.{property}'][network.throats(label)][index])
+        return network[f'throat.{property}'][network.throats(label)][index]
 
 def query_pores(network: op.network.Network, label: str = None, property: str = None, index: int = None):
     """
@@ -53,6 +53,9 @@ def query_pores(network: op.network.Network, label: str = None, property: str = 
     >>> query_pores(network, label='channel', property='coords', index=0)
     """
     if index == None:
-        print(network[f'pore.{property}'][network.pores(label)])
+        return network[f'pore.{property}'][network.pores(label)]
     else:
-        print(network[f'pore.{property}'][network.pores(label)][index])
+        return network[f'pore.{property}'][network.pores(label)][index]
+    
+def get_pore_indices(network: op.network.Network, label: str):
+    return network.pores(label)
