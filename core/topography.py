@@ -42,6 +42,20 @@ def segment_electrode(network: op.network.Network) -> op.network.Network:
 # 2.2: get center coordinates for each segment and collect into the following structure [[y,z], ...]
 # 2.3: create 34 flow field pores - label = ff, diameter = y_size, location@center coordinate w/ x @ arbitrary dist
 def create_ff_pores(network: op.network.Network) -> op.network.Network:
+    """
+    Creates 34 flow field, labelled 'ff' pores positioned along the z-axis at the channel region.
+    Sets all required pore properties including diameter, volume, surface area, and centroid.
+    
+    Parameters
+    ----------
+    network : op.network.Network
+        The network to add FF pores to
+    
+    Returns
+    -------
+    op.network.Network
+        Network with FF pores added and labeled, with all properties defined.
+    """
     pore_coords = network['pore.coords']
     channel_pores_idx = network.pores('channel')
     channel_pores_coords = pore_coords[channel_pores_idx]
@@ -62,8 +76,26 @@ def create_ff_pores(network: op.network.Network) -> op.network.Network:
     network['pore.volume'][ff_pore_indices] = (4/3) * np.pi * (element_y_size/2)**3 
     network['pore.surface_area'][ff_pore_indices] = 4 * np.pi * (element_y_size/2)**2 
     network['pore.centroid'][ff_pore_indices] = ff_pore_coordinates
+    return network
+
+def connect_ff_pores_eachother(network: op.network.Network) -> op.network.Network:
+    """
+    Creates throat connections between sequential FF pores (FF1→FF2, FF2→FF3, etc.).
+    Sets all required throat properties including diameter and length (tip-to-tip distance).
+    Labels these throats as 'ff_to_ff_throat'.
     
+    Parameters
+    ----------
+    network : op.network.Network
+        The network with FF pores already created
+    
+    Returns
+    -------
+    op.network.Network
+        Network with FF-to-FF throats added and labeled, with all properties defined.
+    """
     ff_to_ff_conns = []
+    ff_pore_indices = network.pores('ff')
     for i in range(len(ff_pore_indices) - 1):
         ff_to_ff_conns.append([ff_pore_indices[i], ff_pore_indices[i+1]])
 
@@ -71,6 +103,56 @@ def create_ff_pores(network: op.network.Network) -> op.network.Network:
     ff_to_ff_throat_indices = np.arange(network.Nt - len(ff_to_ff_conns), network.Nt)
     network.set_label(label='ff_to_ff_throat', throats=ff_to_ff_throat_indices)
     network['throat.diameter'][ff_to_ff_throat_indices] = network['pore.diameter'][network.pores('ff')][0]
+    
+    for i, throat_idx in enumerate(ff_to_ff_throat_indices):
+        z1 = network['pore.centroid'][ff_pore_indices[i]][2]
+        z2 = network['pore.centroid'][ff_pore_indices[i+1]][2]
+        network['throat.length'][throat_idx] = z2 - z1 - network['pore.diameter'][network.pores('ff')][0]
+    return network
+
+def connect_electrode_to_ff_pores(network: op.network.Network) -> op.network.Network:
+    """
+    Creates throat connections between FF pores and adjacent channel electrode pores.
+    Finds valid electrode pores within a bounding volume (±radius in y and z directions).
+    Sets all required throat properties including diameter and length (tip-to-tip distance).
+    Labels these throats as 'ff_to_electrode_throat'.
+    
+    Parameters
+    ----------
+    network : op.network.Network
+        The network with FF pores and electrode pores already defined
+    
+    Returns
+    -------
+    op.network.Network
+        Network with FF-to-electrode throats added and labeled, with all properties defined.
+    """
+    ff_pore_indices = network.pores('ff')
+    ff_pore_coordinates = network['pore.coords'][network.pores('ff')]
+    channel_pores_coords = network['pore.coords'][network.pores('channel')]
+    channel_pores_idx = network.pores('channel')
+    throat_conns = []
+    radius = network['pore.diameter'][network.pores('ff')][0] / 2
+    for i, ff_idx in enumerate(ff_pore_indices):
+        ff_coord = ff_pore_coordinates[i]
+        ff_y, ff_z = ff_coord[1], ff_coord[2]
+        
+        # Find channel pores within the bounding volume
+        # Conditions: y within ±radius, z within ±radius
+        y_match = np.abs(channel_pores_coords[:, 1] - ff_y) <= radius
+        z_match = np.abs(channel_pores_coords[:, 2] - ff_z) <= radius
+        valid_mask = y_match & z_match
+        
+        # Get the actual pore indices of valid channel pores
+        valid_channel_pores = channel_pores_idx[valid_mask]
+        
+        # Create throat connections [ff_pore, channel_pore]
+        for channel_idx in valid_channel_pores:
+            throat_conns.append([ff_idx, channel_idx])
+    op.topotools.extend(network, conns=throat_conns)
+    ff_throat_pore_to_electrode_indices = np.arange(network.Nt - len(throat_conns), network.Nt)
+    network.set_label(label='ff_to_electrode_throat', throats=ff_throat_pore_to_electrode_indices)
+    network['throat.diameter'][ff_throat_pore_to_electrode_indices] = network['pore.diameter'][network.pores('channel')][0]
 
     # Calculate throat lengths (tip-to-tip distance)
     for i, throat_idx in enumerate(ff_throat_pore_to_electrode_indices):
@@ -89,36 +171,8 @@ def create_ff_pores(network: op.network.Network) -> op.network.Network:
         
         # Subtract both radii to get tip-to-tip distance
         network['throat.length'][throat_idx] = centroid_distance - ff_radius - channel_radius
-        
-    for i, throat_idx in enumerate(ff_to_ff_throat_indices):
-        z1 = network['pore.centroid'][ff_pore_indices[i]][2]
-        z2 = network['pore.centroid'][ff_pore_indices[i+1]][2]
-        network['throat.length'][throat_idx] = z2 - z1 - network['pore.diameter'][network.pores('ff')][0]
+
     return network
-def connect_ff_pores_to_electrode(network: op.network.Network) -> op.network.Network:
-    throat_conns = []
-    radius = element_y_size / 2
-    for i, ff_idx in enumerate(ff_pore_indices):
-        ff_coord = ff_pore_coordinates[i]
-        ff_y, ff_z = ff_coord[1], ff_coord[2]
-        
-        # Find channel pores within the bounding volume
-        # Conditions: y within ±radius, z within ±radius
-        y_match = np.abs(channel_pores_coords[:, 1] - ff_y) <= radius
-        z_match = np.abs(channel_pores_coords[:, 2] - ff_z) <= radius
-        valid_mask = y_match & z_match
-        
-        # Get the actual pore indices of valid channel pores
-        valid_channel_pores = channel_pores_idx[valid_mask]
-        
-        # Create throat connections [ff_pore, channel_pore]
-        for channel_idx in valid_channel_pores:
-            throat_conns.append([ff_idx, channel_idx])
-    
-    op.topotools.extend(network, conns=throat_conns)
-    ff_throat_pore_to_electrode_indices = np.arange(network.Nt - len(throat_conns), network.Nt)
-    network.set_label(label='ff_to_electrode_throat', throats=ff_throat_pore_to_electrode_indices)
-    network['throat.diameter'][ff_throat_pore_to_electrode_indices] = network['pore.diameter'][network.pores('channel')][0]
 def define_membrane(network: op.network.Network) -> op.network.Network:
     """
     Re-labels all pores labeled 'right' to 'membrane'. 'right' pores are opposite to the 'ff' pores.
@@ -160,12 +214,12 @@ network = project.network
 
 network = segment_electrode(network=network)
 network = create_ff_pores(network=network)
+network = connect_ff_pores_eachother(network=network)
+network = connect_electrode_to_ff_pores(network=network)
 network = define_membrane(network=network)
 network = define_ff_boundaries(network=network)
 
-#q.query_throats(network, 'ff_to_electrode_throat', 'length', 0)
-q.query_pores(network, 'channel', 'centroid', 70)
 ws.save_project(project, filename='segmented_freudenberg.pnm')
-op.io.project_to_vtk(project, filename="yerrrrrr")
+op.io.project_to_vtk(project, filename="test")
 
 
