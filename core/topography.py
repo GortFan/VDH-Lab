@@ -75,6 +75,7 @@ def create_ff_pores(network: op.network.Network) -> op.network.Network:
     network['pore.diameter'][ff_pore_indices] = element_y_size
     network['pore.volume'][ff_pore_indices] = (4/3) * np.pi * (element_y_size/2)**3 
     network['pore.surface_area'][ff_pore_indices] = 4 * np.pi * (element_y_size/2)**2 
+    network['pore.area'][ff_pore_indices] = np.pi * (element_y_size/2)**2
     network['pore.centroid'][ff_pore_indices] = ff_pore_coordinates
     return network
 
@@ -108,6 +109,17 @@ def connect_ff_pores_eachother(network: op.network.Network) -> op.network.Networ
         z1 = network['pore.centroid'][ff_pore_indices[i]][2]
         z2 = network['pore.centroid'][ff_pore_indices[i+1]][2]
         network['throat.length'][throat_idx] = z2 - z1 - network['pore.diameter'][network.pores('ff')][0]
+    # Add throat area
+    network['throat.area'][ff_to_ff_throat_indices] = np.pi / 4 * network['throat.diameter'][ff_to_ff_throat_indices]**2
+
+    # Add conduit lengths
+    for i, throat_idx in enumerate(ff_to_ff_throat_indices):
+        pore1_idx = ff_pore_indices[i]
+        pore2_idx = ff_pore_indices[i+1]
+        network['throat.conduit_lengths.pore1'][throat_idx] = network['pore.diameter'][pore1_idx] / 2
+        network['throat.conduit_lengths.throat'][throat_idx] = network['throat.length'][throat_idx]
+        network['throat.conduit_lengths.pore2'][throat_idx] = network['pore.diameter'][pore2_idx] / 2
+    
     return network
 
 def connect_electrode_to_ff_pores(network: op.network.Network) -> op.network.Network:
@@ -172,7 +184,17 @@ def connect_electrode_to_ff_pores(network: op.network.Network) -> op.network.Net
         # Subtract both radii to get tip-to-tip distance
         network['throat.length'][throat_idx] = centroid_distance - ff_radius - channel_radius
 
+    # Add throat area
+    network['throat.area'][ff_throat_pore_to_electrode_indices] = np.pi / 4 * network['throat.diameter'][ff_throat_pore_to_electrode_indices]**2
+
+    # Add conduit lengths
+    for i, throat_idx in enumerate(ff_throat_pore_to_electrode_indices):
+        conn = throat_conns[i]
+        network['throat.conduit_lengths.pore1'][throat_idx] = network['pore.diameter'][conn[0]] / 2
+        network['throat.conduit_lengths.throat'][throat_idx] = network['throat.length'][throat_idx]
+        network['throat.conduit_lengths.pore2'][throat_idx] = network['pore.diameter'][conn[1]] / 2
     return network
+
 def define_membrane(network: op.network.Network) -> op.network.Network:
     """
     Re-labels all pores labeled 'right' to 'membrane'. 'right' pores are opposite to the 'ff' pores.
@@ -208,18 +230,6 @@ def define_ff_boundaries(network: op.network.Network) -> op.network.Network:
     network.set_label(label='outlet', pores=[ff_pores[-1]])
     return network
 
-ws = op.utils.Workspace()
-project = ws.load_project(filename='17x_vertical_Freudenberg.pnm')
-network = project.network
 
-network = segment_electrode(network=network)
-network = create_ff_pores(network=network)
-network = connect_ff_pores_eachother(network=network)
-network = connect_electrode_to_ff_pores(network=network)
-network = define_membrane(network=network)
-network = define_ff_boundaries(network=network)
-
-ws.save_project(project, filename='segmented_freudenberg.pnm')
-op.io.project_to_vtk(project, filename="test")
 
 
