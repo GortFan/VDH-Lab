@@ -197,7 +197,7 @@ def connect_electrode_to_ff_pores(network: op.network.Network) -> op.network.Net
 
 def define_membrane(network: op.network.Network) -> op.network.Network:
     """
-    Re-labels all pores labeled 'right' to 'membrane'. 'right' pores are opposite to the 'ff' pores.
+    Re-labels all pores labeled 'left' to 'membrane'. 'left' pores are opposite to the 'ff' pores.
     This represents the physical structure of a half-stack redox flow battery.
     
     Parameters:
@@ -209,7 +209,7 @@ def define_membrane(network: op.network.Network) -> op.network.Network:
     --------
     OpenPNM Network object : OpenPNM Network object with the membrane label applied.
     """
-    network.set_label(label='membrane', pores=network.pores('right'))
+    network.set_label(label='membrane', pores=network.pores('left'))
     return network
     
 def define_ff_boundaries(network: op.network.Network) -> op.network.Network:
