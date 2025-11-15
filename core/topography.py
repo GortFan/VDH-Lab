@@ -8,7 +8,7 @@ if not hasattr(np, 'bool'):
 
 def segment_electrode(network: op.network.Network) -> op.network.Network:
     """
-    Segments the electrode network boundary pores, labelled 'left' into two symmetric groups about the y-axis midpoint. 
+    Segments the electrode network boundary pores, labelled 'right' into two symmetric groups about the y-axis midpoint. 
     Segments will be labelled electrode_rib and electrode_ff, respectively. 
 
     Parameters:
@@ -21,16 +21,16 @@ def segment_electrode(network: op.network.Network) -> op.network.Network:
     OpenPNM Network object : OpenPNM Network object with the segmentation changes applied.
     """
     pore_coords = network['pore.coords']
-    left_pores_idx = network.pores('left')
-    left_pores_coords = pore_coords[left_pores_idx]
+    right_pores_idx = network.pores('right')
+    right_pores_coords = pore_coords[right_pores_idx]
 
     y_min = np.min(pore_coords, axis=0)[1]
     y_max = np.max(pore_coords, axis=0)[1]
     y_midpoint = (y_max - y_min) / 2
 
-    left_pores_bisected = left_pores_coords[:,1] >= y_midpoint
-    ff_idx = left_pores_idx[left_pores_bisected]
-    rib_idx = left_pores_idx[~left_pores_bisected]
+    left_pores_bisected = right_pores_coords[:,1] >= y_midpoint
+    ff_idx = right_pores_idx[left_pores_bisected]
+    rib_idx = right_pores_idx[~left_pores_bisected]
 
     network.set_label(label='rib', pores = rib_idx)
     network.set_label(label='channel', pores = ff_idx)
@@ -67,7 +67,7 @@ def create_ff_pores(network: op.network.Network) -> op.network.Network:
     z_center = np.arange(start=z_min + element_z_size/2, stop=z_max, step=element_z_size)
     channel_pore_centroid_x = network['pore.centroid'][network.pores('channel')][0][0]
     channel_pore_diameter = network['pore.diameter'][network.pores('channel')][0]
-    ff_pore_coordinates = [[channel_pore_centroid_x-(channel_pore_diameter/2)-(element_y_size/2), y_center, z] for z in z_center]
+    ff_pore_coordinates = [[channel_pore_centroid_x+(channel_pore_diameter/2)+(element_y_size/2), y_center, z] for z in z_center]
     
     op.topotools.extend(network, coords=ff_pore_coordinates)
     ff_pore_indices = np.arange(network.Np - len(ff_pore_coordinates), network.Np)
@@ -226,8 +226,8 @@ def define_ff_boundaries(network: op.network.Network) -> op.network.Network:
     OpenPNM Network object : OpenPNM Network object with inlet/outlet labels applied.
     """
     ff_pores = network.pores('ff')
-    network.set_label(label='inlet', pores=[ff_pores[0]])
-    network.set_label(label='outlet', pores=[ff_pores[-1]])
+    network.set_label(label='flow_inlet', pores=[ff_pores[0]])
+    network.set_label(label='flow_outlet', pores=[ff_pores[-1]])
     return network
 
 
