@@ -1,6 +1,7 @@
 import openpnm as op
 import numpy as np
 import query as q
+from  scipy.spatial import cKDTree
 
 if not hasattr(np, 'bool'):
     np.bool = bool
@@ -120,6 +121,29 @@ def connect_ff_pores_eachother(network: op.network.Network) -> op.network.Networ
         network['throat.conduit_lengths.throat'][throat_idx] = network['throat.length'][throat_idx]
         network['throat.conduit_lengths.pore2'][throat_idx] = network['pore.diameter'][pore2_idx] / 2
     
+    # Add throat volume (cylinder volume)
+    radius = network['throat.diameter'][ff_to_ff_throat_indices] / 2
+    network['throat.volume'][ff_to_ff_throat_indices] = np.pi * radius**2 * network['throat.length'][ff_to_ff_throat_indices]
+    
+    # Add throat centroid (midpoint between connected pores)
+    for i, throat_idx in enumerate(ff_to_ff_throat_indices):
+        pore1_coord = network['pore.coords'][ff_pore_indices[i]]
+        pore2_coord = network['pore.coords'][ff_pore_indices[i+1]]
+        network['throat.centroid'][throat_idx] = (pore1_coord + pore2_coord) / 2
+    
+    # Add throat endpoints (head = pore1 surface, tail = pore2 surface)
+    for i, throat_idx in enumerate(ff_to_ff_throat_indices):
+        pore1_idx = ff_pore_indices[i]
+        pore2_idx = ff_pore_indices[i+1]
+        pore1_coord = network['pore.coords'][pore1_idx]
+        pore2_coord = network['pore.coords'][pore2_idx]
+        direction = (pore2_coord - pore1_coord) / np.linalg.norm(pore2_coord - pore1_coord)
+        network['throat.endpoints.head'][throat_idx] = pore1_coord + direction * (network['pore.diameter'][pore1_idx] / 2)
+        network['throat.endpoints.tail'][throat_idx] = pore2_coord - direction * (network['pore.diameter'][pore2_idx] / 2)
+    
+    # Add throat spacing (distance between pore surfaces)
+    network['throat.spacing'][ff_to_ff_throat_indices] = network['throat.length'][ff_to_ff_throat_indices]
+    
     return network
 
 def connect_electrode_to_ff_pores(network: op.network.Network) -> op.network.Network:
@@ -193,6 +217,30 @@ def connect_electrode_to_ff_pores(network: op.network.Network) -> op.network.Net
         network['throat.conduit_lengths.pore1'][throat_idx] = network['pore.diameter'][conn[0]] / 2
         network['throat.conduit_lengths.throat'][throat_idx] = network['throat.length'][throat_idx]
         network['throat.conduit_lengths.pore2'][throat_idx] = network['pore.diameter'][conn[1]] / 2
+    
+    # Add throat volume (cylinder volume)
+    radius = network['throat.diameter'][ff_throat_pore_to_electrode_indices] / 2
+    network['throat.volume'][ff_throat_pore_to_electrode_indices] = np.pi * radius**2 * network['throat.length'][ff_throat_pore_to_electrode_indices]
+    
+    # Add throat centroid (midpoint between connected pores)
+    for i, throat_idx in enumerate(ff_throat_pore_to_electrode_indices):
+        conn = throat_conns[i]
+        pore1_coord = network['pore.coords'][conn[0]]
+        pore2_coord = network['pore.coords'][conn[1]]
+        network['throat.centroid'][throat_idx] = (pore1_coord + pore2_coord) / 2
+    
+    # Add throat endpoints (head = pore1 surface, tail = pore2 surface)
+    for i, throat_idx in enumerate(ff_throat_pore_to_electrode_indices):
+        conn = throat_conns[i]
+        pore1_coord = network['pore.coords'][conn[0]]
+        pore2_coord = network['pore.coords'][conn[1]]
+        direction = (pore2_coord - pore1_coord) / np.linalg.norm(pore2_coord - pore1_coord)
+        network['throat.endpoints.head'][throat_idx] = pore1_coord + direction * (network['pore.diameter'][conn[0]] / 2)
+        network['throat.endpoints.tail'][throat_idx] = pore2_coord - direction * (network['pore.diameter'][conn[1]] / 2)
+    
+    # Add throat spacing (distance between pore surfaces)
+    network['throat.spacing'][ff_throat_pore_to_electrode_indices] = network['throat.length'][ff_throat_pore_to_electrode_indices]
+    
     return network
 
 def define_membrane(network: op.network.Network) -> op.network.Network:
@@ -230,6 +278,141 @@ def define_ff_boundaries(network: op.network.Network) -> op.network.Network:
     network.set_label(label='flow_outlet', pores=[ff_pores[-1]])
     return network
 
+def define_ff_internal_channel_pores(network: op.network.Network) -> op.network.Network:
+    """
+    Labels all FF pores except the first (inlet) and last (outlet) as 'ff_internal'.
+    
+    Parameters
+    ----------
+    network : op.network.Network
+        The network with FF pores already defined
+    
+    Returns
+    -------
+    op.network.Network
+        Network with ff_internal label applied to internal FF pores.
+    """
+    ff_pores = network.pores('ff')
+    internal_ff_pores = ff_pores[1:-1]  # Exclude first and last
+    network.set_label(label='ff_internal', pores=internal_ff_pores)
+    return network
 
+def create_current_collector_pores(network: op.network.Network) -> op.network.Network:
+    ff_pore_radius = network['pore.diameter'][network.pores('ff')][0] / 2
+    cc_pore_diameter = 3.74212e-6
+    density_factor = 0.1
+    
+    network.set_label(label='current_collector', pores=network.pores('rib'))
+    
+    # Reference point and bounds
+    ff_center = network['pore.coords'][network.pores('ff')][0]
+    x_c, y_c, z_c = ff_center
+    z_min = network['pore.coords'][network.pores('ff')][0][2] - ff_pore_radius
+    z_max = network['pore.coords'][network.pores('ff')][-1][2] + ff_pore_radius
+    
+    all_coords = []
+    
+    # Define 5 faces: (fixed_axis, fixed_value, [vary_axis1, vary_axis2])
+    faces = [
+        ('x', x_c + ff_pore_radius, 'y', 'z', y_c - ff_pore_radius, y_c + ff_pore_radius, z_min, z_max),  # +x face
+        ('y', y_c + ff_pore_radius, 'x', 'z', x_c - ff_pore_radius, x_c + ff_pore_radius, z_min, z_max),  # +y face
+        ('y', y_c - ff_pore_radius, 'x', 'z', x_c - ff_pore_radius, x_c + ff_pore_radius, z_min, z_max),  # -y face
+        ('z', z_min, 'x', 'y', x_c - ff_pore_radius, x_c + ff_pore_radius, y_c - ff_pore_radius, y_c + ff_pore_radius),  # -z face
+        ('z', z_max, 'x', 'y', x_c - ff_pore_radius, x_c + ff_pore_radius, y_c - ff_pore_radius, y_c + ff_pore_radius),  # +z face
+    ]
+    
+    for face in faces:
+        fixed_axis, fixed_val, ax1, ax2, min1, max1, min2, max2 = face
+        
+        n1 = int(((max1 - min1) / cc_pore_diameter) * density_factor)
+        n2 = int(((max2 - min2) / cc_pore_diameter) * density_factor)
+        
+        vals1 = np.linspace(min1, max1, n1)
+        vals2 = np.linspace(min2, max2, n2)
+        V1, V2 = np.meshgrid(vals1, vals2)
+        
+        fixed_vals = np.full(V1.size, fixed_val)
+        
+        # Map to x, y, z based on axis names
+        axis_map = {'x': 0, 'y': 1, 'z': 2}
+        coords = np.zeros((V1.size, 3))
+        coords[:, axis_map[fixed_axis]] = fixed_vals
+        coords[:, axis_map[ax1]] = V1.flatten()
+        coords[:, axis_map[ax2]] = V2.flatten()
+        
+        all_coords.append(coords)
+    
+    cc_pore_coordinates = np.vstack(all_coords)
+    
+    op.topotools.extend(network=network, coords=cc_pore_coordinates)
+    new_cc_pore_indices = np.arange(network.Np - len(cc_pore_coordinates), network.Np)
+    network.set_label(label='current_collector', pores=new_cc_pore_indices)
+    network['pore.diameter'][new_cc_pore_indices] = cc_pore_diameter
+    network['pore.volume'][new_cc_pore_indices] = (4/3) * np.pi * (cc_pore_diameter/2)**3
+    network['pore.surface_area'][new_cc_pore_indices] = 4 * np.pi * (cc_pore_diameter/2)**2
+    network['pore.area'][new_cc_pore_indices] = np.pi * (cc_pore_diameter/2)**2
+    network['pore.centroid'][new_cc_pore_indices] = cc_pore_coordinates
 
+    # Connect current collector pores to FF pores via spatial proximity search
+    cc_pore_coords = network['pore.coords'][new_cc_pore_indices]
+    ff_pore_coords = network['pore.coords'][network.pores('ff')]
+    ff_pore_indices = network.pores('ff')
+    throat_conns = []
+
+    # Build KD-tree for efficient spatial queries
+    tree = cKDTree(ff_pore_coords)
+    search_radius = ff_pore_radius * 2  # 2x to capture corner/edge CC pores (corner pore hypotenouse > radaii by a lot in some cases)
+
+    for i, cc_idx in enumerate(new_cc_pore_indices):
+        cc_coord = cc_pore_coords[i]
+        
+        # Find all FF pores within search radius
+        nearby_ff_positions = tree.query_ball_point(cc_coord, r=search_radius)
+        
+        # Convert positions to actual pore indices
+        for pos in nearby_ff_positions:
+            ff_idx = ff_pore_indices[pos]
+            throat_conns.append([cc_idx, ff_idx])
+
+    op.topotools.extend(network, conns=throat_conns)
+    cc_to_ff_throat_indices = np.arange(network.Nt - len(throat_conns), network.Nt)
+    network.set_label(label='cc_to_ff_throat', throats=cc_to_ff_throat_indices)
+    network['throat.diameter'][cc_to_ff_throat_indices] = cc_pore_diameter
+
+    # Calculate throat lengths (tip-to-tip)
+    for i, throat_idx in enumerate(cc_to_ff_throat_indices):
+        conn = throat_conns[i]
+        cc_centroid = network['pore.coords'][conn[0]]
+        ff_centroid = network['pore.coords'][conn[1]]
+        
+        cc_radius = cc_pore_diameter / 2
+        ff_radius = ff_pore_radius
+        
+        centroid_distance = np.linalg.norm(cc_centroid - ff_centroid)
+        network['throat.length'][throat_idx] = centroid_distance - cc_radius - ff_radius
+
+    # Add other required throat properties
+    network['throat.area'][cc_to_ff_throat_indices] = np.pi / 4 * network['throat.diameter'][cc_to_ff_throat_indices]**2
+
+    for i, throat_idx in enumerate(cc_to_ff_throat_indices):
+        conn = throat_conns[i]
+        network['throat.conduit_lengths.pore1'][throat_idx] = cc_pore_diameter / 2
+        network['throat.conduit_lengths.throat'][throat_idx] = network['throat.length'][throat_idx]
+        network['throat.conduit_lengths.pore2'][throat_idx] = ff_pore_radius
+
+    radius = network['throat.diameter'][cc_to_ff_throat_indices] / 2
+    network['throat.volume'][cc_to_ff_throat_indices] = np.pi * radius**2 * network['throat.length'][cc_to_ff_throat_indices]
+
+    for i, throat_idx in enumerate(cc_to_ff_throat_indices):
+        conn = throat_conns[i]
+        pore1_coord = network['pore.coords'][conn[0]]
+        pore2_coord = network['pore.coords'][conn[1]]
+        network['throat.centroid'][throat_idx] = (pore1_coord + pore2_coord) / 2
+        
+        direction = (pore2_coord - pore1_coord) / np.linalg.norm(pore2_coord - pore1_coord)
+        network['throat.endpoints.head'][throat_idx] = pore1_coord + direction * (cc_pore_diameter / 2)
+        network['throat.endpoints.tail'][throat_idx] = pore2_coord - direction * ff_pore_radius
+
+    network['throat.spacing'][cc_to_ff_throat_indices] = network['throat.length'][cc_to_ff_throat_indices]
+    return network
 
