@@ -46,4 +46,11 @@ conda install --file requirements/conda.txt -c conda-forge
 ### 8. Install OpenPNM in editable mode
 ```bash
 pip install -e .
-``` 
+```
+
+
+### 9. Install PNM-RFB dependencies
+```bash
+cd ../
+pip install -r requirements.txt
+```
